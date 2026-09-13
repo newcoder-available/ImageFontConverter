@@ -30,15 +30,28 @@ LANGUAGE_FONT_MAP = {
     "bold": "NotoSans-Bold.ttf",
 }
 
+FONT_FAMILY_MAP = {
+    "titan one": "titanone-regular.ttf",
+    "arial black": "ariblk.ttf",
+    "impact": "impact.ttf",
+    "comic bold": "comicbd.ttf",
+    "cooper black": "coopbl.ttf",
+    "segoe black": "seguibl.ttf",
+    "noto sans": "NotoSans-Regular.ttf",
+    "noto bold": "NotoSans-Bold.ttf",
+}
+
 AVAILABLE_FONTS = [
+    {"id": "titan_one", "name": "Titan One (3D / Cartoon / Display)", "category": "Display", "isUnicode": True},
+    {"id": "ariblk", "name": "Arial Black (Heavy Bold)", "category": "Display", "isUnicode": True},
+    {"id": "impact", "name": "Impact (Condensed Bold)", "category": "Display", "isUnicode": True},
+    {"id": "coopbl", "name": "Cooper Black (Rounded)", "category": "Display", "isUnicode": True},
     {"id": "noto_sans", "name": "Noto Sans (Universal)", "category": "Sans Serif", "isUnicode": True},
     {"id": "msyh", "name": "Microsoft YaHei (Chinese)", "category": "Sans Serif", "isUnicode": True},
     {"id": "msgothic", "name": "MS Gothic (Japanese)", "category": "Sans Serif", "isUnicode": True},
     {"id": "malgun", "name": "Malgun Gothic (Korean)", "category": "Sans Serif", "isUnicode": True},
     {"id": "noto_devanagari", "name": "Noto Sans Devanagari (Hindi)", "category": "Sans Serif", "isUnicode": True},
     {"id": "noto_arabic", "name": "Noto Sans Arabic (Arabic RTL)", "category": "Sans Serif", "isUnicode": True},
-    {"id": "arial", "name": "Arial", "category": "Sans Serif", "isUnicode": True},
-    {"id": "tahoma", "name": "Tahoma", "category": "Sans Serif", "isUnicode": True},
 ]
 
 class TextRenderer:
@@ -46,25 +59,52 @@ class TextRenderer:
         self.font_dir = font_dir
         self.font_cache: Dict[str, ImageFont.FreeTypeFont] = {}
 
-    def get_font_for_language(self, target_lang: str, weight: str = "bold", requested_family: Optional[str] = None) -> str:
+    def get_font_for_language(
+        self,
+        target_lang: str,
+        weight: str = "bold",
+        requested_family: Optional[str] = None,
+        font_category: Optional[str] = None
+    ) -> str:
         """
-        Resolves the best font file path for the target language and weight.
+        Resolves the best font file path matching the typography style (Display / 3D / Bold / Regular)
+        and target language Unicode coverage.
         """
         lang_key = target_lang.lower().replace("_", "-")
-        
-        # Check specific language mapping first
-        if lang_key in LANGUAGE_FONT_MAP:
-            font_name = LANGUAGE_FONT_MAP[lang_key]
-        else:
-            font_name = "NotoSans-Bold.ttf" if weight.lower() == "bold" else "NotoSans-Regular.ttf"
 
-        path = os.path.join(self.font_dir, font_name)
-        if os.path.exists(path):
-            return path
-            
-        # Fallback to any existing font
-        for fallback in ["NotoSans-Bold.ttf", "NotoSans-Regular.ttf", "arial.ttf", "msyh.ttc", "tahoma.ttf"]:
-            fb_path = os.path.join(self.font_dir, fallback)
+        # 1. Check specific non-Latin language fonts first (CJK, Arabic, Hindi)
+        if lang_key in ["ar", "arabic", "hi", "hindi", "zh-cn", "zh-tw", "zh", "chinese", "ja", "japanese", "ko", "korean"]:
+            font_name = LANGUAGE_FONT_MAP.get(lang_key, "NotoSans-Regular.ttf")
+            path = os.path.join(self.font_dir, font_name)
+            if os.path.exists(path):
+                return path
+
+        # 2. Check requested family
+        if requested_family:
+            req_key = requested_family.lower().strip()
+            if req_key in FONT_FAMILY_MAP:
+                cand = os.path.join(self.font_dir, FONT_FAMILY_MAP[req_key])
+                if os.path.exists(cand):
+                    return cand
+
+        # 3. For Display / Cartoon style in Latin/Western languages, use punchy Display fonts
+        if font_category and font_category.lower() in ["display", "cartoon", "game", "comic"]:
+            for display_font in ["titanone-regular.ttf", "ariblk.ttf", "coopbl.ttf", "impact.ttf", "seguibl.ttf"]:
+                p = os.path.join(self.font_dir, display_font)
+                if os.path.exists(p):
+                    return p
+
+        # 4. Standard Latin / Cyrillic fallback
+        bold_path = os.path.join(self.font_dir, "NotoSans-Bold.ttf")
+        reg_path = os.path.join(self.font_dir, "NotoSans-Regular.ttf")
+        if weight.lower() == "bold" and os.path.exists(bold_path):
+            return bold_path
+        if os.path.exists(reg_path):
+            return reg_path
+
+        # 5. Generic fallback
+        for fb in ["ariblk.ttf", "arial.ttf", "tahoma.ttf"]:
+            fb_path = os.path.join(self.font_dir, fb)
             if os.path.exists(fb_path):
                 return fb_path
 
@@ -86,9 +126,6 @@ class TextRenderer:
         return text
 
     def wrap_text_to_lines(self, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
-        """
-        Wraps words into multiple lines if they exceed max_width.
-        """
         words = text.split(" ")
         if len(words) <= 1:
             return [text]
@@ -98,7 +135,6 @@ class TextRenderer:
 
         for word in words:
             test_line = " ".join(current_line + [word])
-            # Use getlength or getbbox for accurate width
             try:
                 bbox = font.getbbox(test_line)
                 line_w = bbox[2] - bbox[0]
@@ -116,10 +152,7 @@ class TextRenderer:
 
         return lines
 
-    def measure_text_lines(self, lines: List[str], font: ImageFont.FreeTypeFont, line_height_mult: float = 1.2) -> Tuple[int, int]:
-        """
-        Measures total width and height of multi-line text.
-        """
+    def measure_text_lines(self, lines: List[str], font: ImageFont.FreeTypeFont, line_height_mult: float = 1.15) -> Tuple[int, int]:
         max_w = 0
         total_h = 0
         for line in lines:
@@ -141,13 +174,13 @@ class TextRenderer:
         box_width: int,
         box_height: int,
         font_path: str,
-        max_font_size: int = 120,
+        max_font_size: int = 140,
         min_font_size: int = 10,
         target_lang: str = "en",
         allow_multiline: bool = True
     ) -> Tuple[int, ImageFont.FreeTypeFont, List[str]]:
         """
-        Uses binary search to find the largest possible font size that fits inside box_width x box_height.
+        Binary search font sizing with multiline wrapping to perfectly fill bounding boxes.
         """
         prepared_text = self.prepare_text_for_rendering(text, target_lang)
         
@@ -157,7 +190,6 @@ class TextRenderer:
         best_font = None
         best_lines = [prepared_text]
 
-        # Target box allows 95% padding tolerance
         allowed_w = int(box_width * 0.96)
         allowed_h = int(box_height * 0.96)
 
@@ -179,9 +211,9 @@ class TextRenderer:
                 best_size = mid
                 best_font = font
                 best_lines = lines
-                low = mid + 1  # Try larger
+                low = mid + 1
             else:
-                high = mid - 1  # Try smaller
+                high = mid - 1
 
         if best_font is None:
             try:
@@ -191,8 +223,9 @@ class TextRenderer:
 
         return best_size, best_font, best_lines
 
-    def hex_to_rgba(self, hex_color: str, alpha: int = 255) -> Tuple[int, int, int, int]:
-        """Converts #RRGGBB or #RGB to RGBA tuple."""
+    def hex_to_rgba(self, hex_color: Optional[str], alpha: int = 255) -> Tuple[int, int, int, int]:
+        if not hex_color:
+            return (255, 255, 255, alpha)
         hex_color = hex_color.lstrip("#")
         if len(hex_color) == 3:
             hex_color = "".join([c * 2 for c in hex_color])
@@ -210,8 +243,11 @@ class TextRenderer:
         target_lang: str
     ) -> Image.Image:
         """
-        Renders a single translated text block onto the PIL RGBA image,
-        respecting bounding box, rotation, alignment, color, weight, and font.
+        Renders a single translated text block onto the PIL RGBA image with:
+        - 3D Extrusion & Drop Shadow depth layers
+        - Thick Outline Stroke
+        - Vibrant Foreground Face Fill
+        - Accurate scale, centering, and rotation
         """
         bbox = block.boundingBox
         style = block.style
@@ -219,21 +255,25 @@ class TextRenderer:
         if not text_to_render.strip():
             return base_pil_rgba
 
-        font_path = self.get_font_for_language(target_lang, weight=style.fontWeight, requested_family=style.fontFamily)
+        font_path = self.get_font_for_language(
+            target_lang=target_lang,
+            weight=style.fontWeight,
+            requested_family=style.fontFamily,
+            font_category=style.fontCategory
+        )
         
-        # Determine font size if not manually edited or if fits better
+        # Calculate optimal font size
         calculated_size, font, lines = self.fit_text_to_box(
             text_to_render,
             box_width=bbox.width,
             box_height=bbox.height,
             font_path=font_path,
             max_font_size=max(style.fontSize, int(bbox.height * 0.95)),
-            min_font_size=10,
+            min_font_size=12,
             target_lang=target_lang,
-            allow_multiline=style.isMultiline or (" " in text_to_render and bbox.width < len(text_to_render) * 15)
+            allow_multiline=style.isMultiline or (" " in text_to_render and bbox.width < len(text_to_render) * 16)
         )
 
-        # If user explicitly set font size and edited, use it
         if block.isEdited and style.fontSize > 8:
             try:
                 font = ImageFont.truetype(font_path, style.fontSize)
@@ -241,20 +281,74 @@ class TextRenderer:
             except Exception:
                 pass
 
-        # Text color
-        fill_color = self.hex_to_rgba(style.color)
+        # Color definitions
+        face_rgba = self.hex_to_rgba(style.color)
+        stroke_rgba = self.hex_to_rgba(style.strokeColor) if style.strokeColor else None
+        shadow_rgba = self.hex_to_rgba(style.shadowColor) if style.shadowColor else None
 
-        # Create temporary high-res layer for rendering text
-        pad = 20
+        # Create temporary canvas
+        pad = 30
         layer_w = bbox.width + pad * 2
         layer_h = bbox.height + pad * 2
         text_layer = Image.new("RGBA", (layer_w, layer_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(text_layer)
 
-        # Calculate line positions and alignment
         total_w, total_h = self.measure_text_lines(lines, font, style.lineHeight)
         start_y = pad + max(0, (bbox.height - total_h) // 2)
 
+        # 1. Render 3D Extrusion / Shadow Depth Layers
+        if shadow_rgba and (style.shadowOffsetY > 0 or style.shadowOffsetX > 0):
+            steps = max(style.shadowOffsetY, style.shadowOffsetX)
+            for step in range(steps, 0, -1):
+                off_x = int(round(style.shadowOffsetX * (step / steps)))
+                off_y = int(round(style.shadowOffsetY * (step / steps)))
+                cur_y = start_y + off_y
+                for line in lines:
+                    try:
+                        line_bbox = font.getbbox(line)
+                        line_w = line_bbox[2] - line_bbox[0]
+                        line_h = line_bbox[3] - line_bbox[1]
+                    except Exception:
+                        line_w = len(line) * 10
+                        line_h = 16
+
+                    if style.alignment == "center":
+                        cur_x = pad + (bbox.width - line_w) // 2 + off_x
+                    elif style.alignment == "right":
+                        cur_x = pad + (bbox.width - line_w) + off_x
+                    else:
+                        cur_x = pad + off_x
+
+                    if style.strokeWidth > 0:
+                        draw.text((cur_x, cur_y), line, font=font, fill=shadow_rgba, stroke_width=style.strokeWidth, stroke_fill=shadow_rgba)
+                    else:
+                        draw.text((cur_x, cur_y), line, font=font, fill=shadow_rgba)
+
+                    cur_y += int(line_h * style.lineHeight)
+
+        # 2. Render Outer Stroke Outline (if present)
+        if stroke_rgba and style.strokeWidth > 0:
+            cur_y = start_y
+            for line in lines:
+                try:
+                    line_bbox = font.getbbox(line)
+                    line_w = line_bbox[2] - line_bbox[0]
+                    line_h = line_bbox[3] - line_bbox[1]
+                except Exception:
+                    line_w = len(line) * 10
+                    line_h = 16
+
+                if style.alignment == "center":
+                    cur_x = pad + (bbox.width - line_w) // 2
+                elif style.alignment == "right":
+                    cur_x = pad + (bbox.width - line_w)
+                else:
+                    cur_x = pad
+
+                draw.text((cur_x, cur_y), line, font=font, fill=stroke_rgba, stroke_width=style.strokeWidth, stroke_fill=stroke_rgba)
+                cur_y += int(line_h * style.lineHeight)
+
+        # 3. Render Vibrant Foreground Text Face
         cur_y = start_y
         for line in lines:
             try:
@@ -272,22 +366,15 @@ class TextRenderer:
             else:
                 cur_x = pad
 
-            # Draw optional subtle stroke for readability if needed
-            if style.strokeColor and style.strokeWidth > 0:
-                stroke_rgba = self.hex_to_rgba(style.strokeColor)
-                draw.text((cur_x, cur_y), line, font=font, fill=fill_color, stroke_width=style.strokeWidth, stroke_fill=stroke_rgba)
-            else:
-                draw.text((cur_x, cur_y), line, font=font, fill=fill_color)
-
+            draw.text((cur_x, cur_y), line, font=font, fill=face_rgba)
             cur_y += int(line_h * style.lineHeight)
 
-        # Handle rotation if text was detected at an angle
+        # 4. Handle Rotation
         rotation_angle = block.rotation or style.rotation
         if abs(rotation_angle) >= 1.5:
-            # Rotate layer around its center
             text_layer = text_layer.rotate(-rotation_angle, resample=Image.Resampling.BICUBIC, expand=False)
 
-        # Paste layer onto base image
+        # Paste onto base image
         paste_x = bbox.x - pad
         paste_y = bbox.y - pad
         base_pil_rgba.alpha_composite(text_layer, (paste_x, paste_y))
@@ -300,11 +387,6 @@ class TextRenderer:
         text_blocks: List[TextBlock],
         target_lang: str
     ) -> np.ndarray:
-        """
-        Renders all translated text blocks onto the inpainted background image.
-        Returns the final translated BGR image.
-        """
-        # Convert BGR to RGBA PIL Image
         img_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(img_rgb).convert("RGBA")
 
@@ -313,7 +395,6 @@ class TextRenderer:
                 continue
             pil_img = self.render_text_block_on_image(pil_img, block, target_lang)
 
-        # Convert back to BGR numpy array
         result_rgb = pil_img.convert("RGB")
         result_bgr = cv2.cvtColor(np.array(result_rgb), cv2.COLOR_RGB2BGR)
         return result_bgr

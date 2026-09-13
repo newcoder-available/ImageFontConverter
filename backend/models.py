@@ -9,16 +9,19 @@ class BoundingBox(BaseModel):
 
 class StyleInfo(BaseModel):
     fontSize: int = Field(default=24, description="Calculated or user font size in px")
-    color: str = Field(default="#FFFFFF", description="Dominant text color in HEX (#RRGGBB)")
+    color: str = Field(default="#FFFFFF", description="Dominant text face color in HEX (#RRGGBB)")
     fontWeight: str = Field(default="bold", description="normal | bold | light")
     fontFamily: str = Field(default="Noto Sans", description="Font family name")
-    fontCategory: str = Field(default="Sans Serif", description="Sans Serif | Serif | Display | Monospace")
+    fontCategory: str = Field(default="Sans Serif", description="Sans Serif | Serif | Display | Monospace | Cartoon")
     alignment: str = Field(default="center", description="left | center | right")
     rotation: float = Field(default=0.0, description="Rotation angle in degrees")
-    lineHeight: float = Field(default=1.2, description="Line height multiplier")
+    lineHeight: float = Field(default=1.15, description="Line height multiplier")
     isMultiline: bool = Field(default=False, description="Whether text spans multiple lines")
     strokeColor: Optional[str] = Field(default=None, description="Outline/stroke color if detected")
     strokeWidth: int = Field(default=0, description="Outline/stroke thickness in px")
+    shadowColor: Optional[str] = Field(default=None, description="3D extrusion or drop shadow color")
+    shadowOffsetX: int = Field(default=0, description="3D shadow horizontal offset in px")
+    shadowOffsetY: int = Field(default=0, description="3D shadow vertical offset in px")
 
 class TextBlock(BaseModel):
     id: str
@@ -45,7 +48,7 @@ class ProcessImageResponse(BaseModel):
     processingTimeMs: float
 
 class RerenderRequest(BaseModel):
-    imageBase64: str  # Base64 of the original or inpainted image
+    imageBase64: str
     inpaintedBase64: Optional[str] = None
     targetLanguage: str
     textBlocks: List[TextBlock]

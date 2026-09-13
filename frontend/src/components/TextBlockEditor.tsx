@@ -268,7 +268,7 @@ export const TextBlockEditor: React.FC<TextBlockEditorProps> = ({
         {/* Color Picker & Palette */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-300">
-            <span>Text Color</span>
+            <span>Text Face Color</span>
             <span className="font-mono text-xs text-slate-400">{selectedBlock.style.color}</span>
           </div>
 
@@ -298,6 +298,102 @@ export const TextBlockEditor: React.FC<TextBlockEditorProps> = ({
               ))}
             </div>
           </div>
+        </div>
+
+        {/* 3D Extrusion Depth & Shadow Color */}
+        <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-purple-300 flex items-center space-x-1.5">
+              <span>3D Shadow & Extrusion</span>
+            </span>
+            <div className="flex items-center space-x-2">
+              <input
+                type="color"
+                value={selectedBlock.style.shadowColor || '#7A0B3C'}
+                onChange={(e) =>
+                  onUpdateBlock({
+                    ...selectedBlock,
+                    style: {
+                      ...selectedBlock.style,
+                      shadowColor: e.target.value,
+                      shadowOffsetY: selectedBlock.style.shadowOffsetY || 6,
+                    },
+                    isEdited: true,
+                  })
+                }
+                className="w-6 h-6 rounded border border-slate-700 cursor-pointer bg-transparent p-0"
+              />
+              <span className="font-mono text-xs text-purple-300">
+                {selectedBlock.style.shadowOffsetY || 0}px
+              </span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={20}
+            value={selectedBlock.style.shadowOffsetY || 0}
+            onChange={(e) =>
+              onUpdateBlock({
+                ...selectedBlock,
+                style: {
+                  ...selectedBlock.style,
+                  shadowOffsetY: parseInt(e.target.value),
+                  shadowColor: selectedBlock.style.shadowColor || '#7A0B3C',
+                },
+                isEdited: true,
+              })
+            }
+            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
+          />
+        </div>
+
+        {/* Outline Stroke & Border */}
+        <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
+              Outline Stroke
+            </span>
+            <div className="flex items-center space-x-2">
+              <input
+                type="color"
+                value={selectedBlock.style.strokeColor || '#200515'}
+                onChange={(e) =>
+                  onUpdateBlock({
+                    ...selectedBlock,
+                    style: {
+                      ...selectedBlock.style,
+                      strokeColor: e.target.value,
+                      strokeWidth: selectedBlock.style.strokeWidth || 3,
+                    },
+                    isEdited: true,
+                  })
+                }
+                className="w-6 h-6 rounded border border-slate-700 cursor-pointer bg-transparent p-0"
+              />
+              <span className="font-mono text-xs text-cyan-300">
+                {selectedBlock.style.strokeWidth || 0}px
+              </span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            value={selectedBlock.style.strokeWidth || 0}
+            onChange={(e) =>
+              onUpdateBlock({
+                ...selectedBlock,
+                style: {
+                  ...selectedBlock.style,
+                  strokeWidth: parseInt(e.target.value),
+                  strokeColor: selectedBlock.style.strokeColor || '#200515',
+                },
+                isEdited: true,
+              })
+            }
+            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+          />
         </div>
 
         {/* Alignment & Rotation */}

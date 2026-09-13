@@ -1,107 +1,172 @@
 import cv2
 import numpy as np
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from models import StyleInfo
 
 class StyleAnalyzer:
     def __init__(self):
         pass
 
-    def extract_dominant_text_color(self, img_bgr: np.ndarray, bbox: Dict[str, int], polygon: List[List[int]]) -> str:
+    def _sample_background_color(self, roi_bgr: np.ndarray) -> np.ndarray:
         """
-        Extracts dominant text color from character strokes inside the text polygon.
-        Uses Otsu thresholding / gradient magnitude to separate foreground text strokes
-        from background pixels, avoiding simple average color bleeding.
+        Samples the outer perimeter of the ROI to determine the surrounding background color.
         """
-        x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
-        if w <= 2 or h <= 2:
-            return "#FFFFFF"
+        h, w = roi_bgr.shape[:2]
+        if h <= 2 or w <= 2:
+            return np.array([255, 255, 255], dtype=np.uint8)
 
-        # Crop ROI
-        roi = img_bgr[y:y+h, x:x+w]
-        if roi.size == 0:
-            return "#FFFFFF"
-
-        # Convert to grayscale
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        top = roi_bgr[0, :]
+        bottom = roi_bgr[-1, :]
+        left = roi_bgr[:, 0]
+        right = roi_bgr[:, -1]
+        border = np.concatenate([top, bottom, left, right], axis=0)
         
-        # Determine if text is bright-on-dark or dark-on-bright using border sample
-        # Sample border pixels of ROI (which are predominantly background)
-        top_edge = gray[0, :]
-        bottom_edge = gray[-1, :]
-        left_edge = gray[:, 0]
-        right_edge = gray[:, -1]
-        border_pixels = np.concatenate([top_edge, bottom_edge, left_edge, right_edge])
-        bg_val = np.median(border_pixels)
-
-        # Otsu thresholding
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Determine which binary value corresponds to text foreground
-        fg_mask = (thresh == 255) if bg_val < 128 else (thresh == 0)
-
-        # If mask is empty or too large (e.g. whole box), fall back to gradient edge pixels
-        fg_count = np.count_nonzero(fg_mask)
-        total_pixels = w * h
-        if fg_count < 5 or fg_count > (total_pixels * 0.85):
-            # Compute Sobel gradients to find stroke edges
-            grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0)
-            grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1)
-            mag = cv2.magnitude(grad_x, grad_y)
-            fg_mask = mag > np.percentile(mag, 70)
-
-        fg_pixels = roi[fg_mask]
-        if len(fg_pixels) == 0:
-            # Fallback to center crop
-            center_crop = roi[h//4:3*h//4, w//4:3*w//4]
-            if center_crop.size > 0:
-                mean_bgr = np.mean(center_crop, axis=(0, 1))
-            else:
-                mean_bgr = np.mean(roi, axis=(0, 1))
-            b, g, r = [int(np.clip(c, 0, 255)) for c in mean_bgr]
-            return f"#{r:02X}{g:02X}{b:02X}"
-
-        # Median color of foreground strokes (robust against noise)
-        med_bgr = np.median(fg_pixels, axis=0)
-        b, g, r = [int(np.clip(c, 0, 255)) for c in med_bgr]
-        return f"#{r:02X}{g:02X}{b:02X}"
+        # Median border BGR
+        med_bgr = np.median(border, axis=0)
+        return med_bgr.astype(np.uint8)
 
     def analyze_style(self, img_bgr: np.ndarray, detected_item: Dict[str, Any]) -> StyleInfo:
         """
-        Estimates font style, size, color, weight, and category for a detected text block.
+        Comprehensive multi-layer style, color, 3D shadow, and font analyzer.
+        Accurately identifies:
+        - Main text face fill color (e.g. Bright Yellow, Gold, White)
+        - Outline stroke border color and thickness
+        - 3D extrusion / drop shadow color and offset
+        - Font category (Display, Cartoon, Bold Sans, Serif)
         """
         bbox = detected_item["boundingBox"]
         poly = detected_item.get("polygon", [])
-        h = bbox["height"]
-        w = bbox["width"]
-        text = detected_item["text"]
+        x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
+        text = detected_item.get("text", "")
         rotation = detected_item.get("rotation", 0.0)
 
-        # Extract dominant color
-        color_hex = self.extract_dominant_text_color(img_bgr, bbox, poly)
+        img_h, img_w = img_bgr.shape[:2]
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(img_w, x + w)
+        y2 = min(img_h, y + h)
 
-        # Estimate font size (typically 70-85% of line height for single-line text)
-        estimated_font_size = max(12, int(h * 0.78))
+        if x2 <= x1 or y2 <= y1:
+            return StyleInfo()
 
-        # Estimate font weight based on stroke width / height ratio
-        # By default, headings or high-confidence UI text are bold
-        font_weight = "bold" if h > 22 or len(text) < 15 else "normal"
+        roi = img_bgr[y1:y2, x1:x2]
+        roi_h, roi_w = roi.shape[:2]
 
-        # Alignment estimation
-        # Short button/banner text tends to be center aligned; multi-word left-aligned
-        alignment = "center" if len(text) <= 20 else "left"
+        # 1. Sample Background Color
+        bg_bgr = self._sample_background_color(roi)
+        
+        # 2. Extract Non-Background (Foreground Text) Pixels
+        # Compute color distance from background
+        diff = np.linalg.norm(roi.astype(np.float32) - bg_bgr.astype(np.float32), axis=2)
+        fg_mask = diff > 30.0
 
-        # Font category estimation
+        fg_count = np.count_nonzero(fg_mask)
+        if fg_count < 10:
+            # Fallback to Otsu threshold
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            fg_mask = otsu == 255
+
+        fg_pixels = roi[fg_mask]
+        if len(fg_pixels) == 0:
+            return StyleInfo(
+                fontSize=max(14, int(h * 0.75)),
+                color="#FFFFFF",
+                fontWeight="bold",
+                alignment="center"
+            )
+
+        # 3. Multi-Cluster Analysis (Distinguish Face Fill vs 3D Extrusion/Shadow vs Outline)
+        # Convert foreground pixels to HSV for brightness & saturation separation
+        fg_hsv = cv2.cvtColor(fg_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
+        saturations = fg_hsv[:, 1]
+        values = fg_hsv[:, 2]
+
+        face_color_bgr = None
+        stroke_color_bgr = None
+        shadow_color_bgr = None
+        stroke_width = 0
+        shadow_offset_x = 0
+        shadow_offset_y = 0
         font_category = "Sans Serif"
+        font_family = "Noto Sans"
+
+        # Check if there is significant color variance (e.g. 3D gaming text like Yellow Face + Maroon Shadow)
+        if len(fg_pixels) >= 30:
+            # K-Means clustering with k=2 or k=3
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 15, 0.2)
+            k = 3 if len(fg_pixels) > 100 else 2
+            _, labels, centers = cv2.kmeans(fg_pixels.astype(np.float32), k, None, criteria, 5, cv2.KMEANS_PP_CENTERS)
+            
+            centers = centers.astype(np.uint8)
+            centers_hsv = cv2.cvtColor(centers.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
+
+            # Sort clusters by a combination of Brightness (Value) and Saturation (Chroma)
+            # The Text Face is typically the brightest or most vibrant colored layer
+            scores = []
+            for i in range(k):
+                h_val, s_val, v_val = centers_hsv[i]
+                # Face score favors high brightness and high saturation
+                score = (float(v_val) * 1.5) + (float(s_val) * 1.2)
+                scores.append((score, i))
+
+            scores.sort(reverse=True)
+            face_idx = scores[0][1]
+            face_color_bgr = centers[face_idx]
+
+            # If there's a distinct secondary darker/maroon cluster, check for 3D extrusion/shadow
+            if k >= 2:
+                dark_idx = scores[-1][1]
+                dark_bgr = centers[dark_idx]
+                
+                # Check color difference between face and shadow
+                face_dark_diff = np.linalg.norm(face_color_bgr.astype(float) - dark_bgr.astype(float))
+                if face_dark_diff > 45:
+                    # Detected 3D extrusion or bold dark stroke
+                    shadow_color_bgr = dark_bgr
+                    stroke_color_bgr = dark_bgr
+                    stroke_width = max(2, min(5, int(h * 0.08)))
+                    shadow_offset_x = max(1, min(6, int(w * 0.02)))
+                    shadow_offset_y = max(2, min(8, int(h * 0.12)))
+                    font_category = "Display"
+                    font_family = "Titan One"
+        else:
+            face_color_bgr = np.median(fg_pixels, axis=0).astype(np.uint8)
+
+        if face_color_bgr is None:
+            face_color_bgr = np.median(fg_pixels, axis=0).astype(np.uint8)
+
+        fb, fg, fr = [int(np.clip(c, 0, 255)) for c in face_color_bgr]
+        face_hex = f"#{fr:02X}{fg:02X}{fb:02X}"
+
+        stroke_hex = None
+        if stroke_color_bgr is not None:
+            sb, sg, sr = [int(np.clip(c, 0, 255)) for c in stroke_color_bgr]
+            stroke_hex = f"#{sr:02X}{sg:02X}{sb:02X}"
+
+        shadow_hex = None
+        if shadow_color_bgr is not None:
+            sh_b, sh_g, sh_r = [int(np.clip(c, 0, 255)) for c in shadow_color_bgr]
+            shadow_hex = f"#{sh_r:02X}{sh_g:02X}{sh_b:02X}"
+
+        # Font size estimation (approx 75-85% of block height)
+        font_size = max(14, int(h * 0.80))
+        font_weight = "bold" if h > 20 or font_category == "Display" else "normal"
+        alignment = "center" if len(text) <= 25 else "left"
 
         return StyleInfo(
-            fontSize=estimated_font_size,
-            color=color_hex,
+            fontSize=font_size,
+            color=face_hex,
             fontWeight=font_weight,
-            fontFamily="Noto Sans",
+            fontFamily=font_family,
             fontCategory=font_category,
             alignment=alignment,
             rotation=rotation,
-            lineHeight=1.2,
-            isMultiline=("\n" in text or (w > 0 and len(text) > 30))
+            lineHeight=1.15,
+            isMultiline=("\n" in text or (w > 0 and len(text) > 30)),
+            strokeColor=stroke_hex,
+            strokeWidth=stroke_width,
+            shadowColor=shadow_hex,
+            shadowOffsetX=shadow_offset_x,
+            shadowOffsetY=shadow_offset_y
         )

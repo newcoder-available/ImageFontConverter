@@ -17,6 +17,9 @@ export interface StyleInfo {
   isMultiline: boolean;
   strokeColor?: string;
   strokeWidth?: number;
+  shadowColor?: string;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
 }
 
 export interface TextBlock {
