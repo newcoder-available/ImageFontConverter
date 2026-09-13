@@ -212,6 +212,15 @@ def rerender_image(req: RerenderRequest):
         textBlocks=req.textBlocks
     )
 
+# Mount Next.js static build if present for unified all-in-one deployment
+from fastapi.staticfiles import StaticFiles
+frontend_out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "out")
+if not os.path.exists(frontend_out_dir):
+    frontend_out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
+
+if os.path.exists(frontend_out_dir):
+    app.mount("/", StaticFiles(directory=frontend_out_dir, html=True), name="frontend")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
