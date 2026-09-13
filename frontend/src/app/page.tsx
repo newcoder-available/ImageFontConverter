@@ -30,7 +30,18 @@ import {
   SampleImageItem 
 } from '@/types';
 
-const API_BASE = 'http://127.0.0.1:8000';
+// Dynamic API Base URL supporting Vercel same-origin rewrites, env vars, and local dev
+const getApiBase = () => {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return ''; // Use relative /api/* when deployed on Vercel
+  }
+  return 'http://127.0.0.1:8000';
+};
+
+const API_BASE = getApiBase();
 
 export default function Home() {
   // Backend & Metadata State
