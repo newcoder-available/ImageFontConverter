@@ -2,16 +2,21 @@ import os
 import time
 import base64
 import io
+import json
+import zipfile
 import cv2
 import numpy as np
 from PIL import Image
-from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from models import (
     ProcessImageResponse,
+    MultiProcessResponse,
+    AnalyzeImageResponse,
+    LocalizedVariant,
     RerenderRequest,
     RerenderResponse,
     SingleTranslateRequest,
@@ -20,19 +25,22 @@ from models import (
     BoundingBox,
     StyleInfo,
     SupportedLanguage,
-    FontOption
+    FontOption,
+    GlossaryTerm,
+    SettingsConfig,
+    ZipExportRequest,
+    BatchProcessRequest,
+    QAResult
 )
-from ocr_engine import OCREngine
-from style_analyzer import StyleAnalyzer
-from inpainter import TextInpainter
 from translator import TranslationService, SUPPORTED_LANGUAGES
 from text_renderer import TextRenderer, AVAILABLE_FONTS
 from sample_generator import generate_all_samples, SAMPLE_DIR
+from agents.orchestrator import LocalizationOrchestrator
 
 app = FastAPI(
-    title="Image Font Converter API",
-    description="Intelligent Non-Destructive In-Image Text Translation and Font Replacement Engine",
-    version="1.0.0"
+    title="LocalizeAI — Multilingual Image Localization Engine",
+    description="Production In-Image Text Localization, Typography Preservation, and AI Quality Assurance",
+    version="2.5.0"
 )
 
 # Enable CORS for Next.js frontend
@@ -44,12 +52,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize CV and ML engines
-ocr_engine = OCREngine()
-style_analyzer = StyleAnalyzer()
-inpainter = TextInpainter(inpaint_radius=4, method="telea")
-translator = TranslationService()
+# Central Orchestrator
+orchestrator = LocalizationOrchestrator()
 text_renderer = TextRenderer()
+translator = TranslationService()
 
 def np_to_base64(img_bgr: np.ndarray, format: str = "PNG") -> str:
     """Encodes OpenCV BGR numpy array to base64 data URI string."""
@@ -74,7 +80,14 @@ def base64_to_np(data_uri: str) -> np.ndarray:
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "service": "Image Font Converter API", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "service": "LOCALIZE AI Engine",
+        "version": "2.5.0",
+        "tagline": "Translate any image. Preserve every detail.",
+        "languagesCount": len(SUPPORTED_LANGUAGES),
+        "aiProvider": orchestrator.settings.aiProvider
+    }
 
 @app.get("/api/languages", response_model=List[SupportedLanguage])
 def get_languages():
@@ -82,53 +95,44 @@ def get_languages():
 
 @app.get("/api/fonts", response_model=List[FontOption])
 def get_fonts():
-    return AVAILABLE_FONTS
+    return [
+        FontOption(
+            id=f["id"],
+            name=f["name"],
+            category=f["category"],
+            isUnicode=f.get("isUnicode", True),
+            scripts=["Universal", "Latin", "CJK", "Devanagari", "Arabic", "Cyrillic", "Gurmukhi", "Tamil", "Telugu", "Kannada", "Malayalam", "Gujarati", "Bengali", "Thai", "Hebrew"]
+        ) for f in AVAILABLE_FONTS
+    ]
 
 @app.get("/api/samples")
 def get_sample_images():
     """Returns pre-generated sample images as base64."""
     generate_all_samples()
     samples = {}
-    for filename in os.listdir(SAMPLE_DIR):
-        if filename.endswith(".png") or filename.endswith(".jpg"):
-            path = os.path.join(SAMPLE_DIR, filename)
-            img = cv2.imread(path)
-            if img is not None:
-                samples[filename] = {
-                    "filename": filename,
-                    "title": filename.replace(".png", "").replace("_", " ").title(),
-                    "base64": np_to_base64(img)
-                }
+    if os.path.exists(SAMPLE_DIR):
+        for filename in os.listdir(SAMPLE_DIR):
+            if filename.endswith(".png") or filename.endswith(".jpg"):
+                path = os.path.join(SAMPLE_DIR, filename)
+                img = cv2.imread(path)
+                if img is not None:
+                    samples[filename] = {
+                        "filename": filename,
+                        "title": filename.replace(".png", "").replace("_", " ").title(),
+                        "base64": np_to_base64(img)
+                    }
     return samples
 
-@app.post("/api/translate-text", response_model=SingleTranslateResponse)
-def translate_single_text(req: SingleTranslateRequest):
-    translated = translator.translate_text(req.text, source_lang=req.sourceLanguage, target_lang=req.targetLanguage)
-    return SingleTranslateResponse(
-        originalText=req.text,
-        translatedText=translated,
-        detectedSourceLanguage=req.sourceLanguage
-    )
-
-@app.post("/api/process", response_model=ProcessImageResponse)
-async def process_image(
+@app.post("/api/analyze", response_model=AnalyzeImageResponse)
+async def analyze_image_endpoint(
     file: Optional[UploadFile] = File(None),
-    imageBase64: Optional[str] = Form(None),
-    sourceLanguage: str = Form("auto"),
-    targetLanguage: str = Form("fr")
+    imageBase64: Optional[str] = Form(None)
 ):
     """
-    Main Computer Vision & Translation Pipeline:
-    1. Decode uploaded image
-    2. Run RapidOCR (PaddleOCR ONNX)
-    3. Analyze Text Style & Extract Foreground Color
-    4. Translate text to target language
-    5. Inpaint background (OpenCV Telea / NS)
-    6. Fit and Render translated text onto inpainted background
+    Vision & OCR Analysis Stage:
+    Detects text regions, auto-identifies source language & script,
+    classifies text (TRANSLATABLE / PROTECTED / AMBIGUOUS), and analyzes typography.
     """
-    start_time = time.time()
-
-    # Load image
     if file:
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
@@ -136,83 +140,288 @@ async def process_image(
     elif imageBase64:
         img_bgr = base64_to_np(imageBase64)
     else:
-        raise HTTPException(status_code=400, detail="No image file or imageBase64 provided")
+        raise HTTPException(status_code=400, detail="No image provided")
 
     if img_bgr is None:
-        raise HTTPException(status_code=400, detail="Invalid or unreadable image")
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    analysis, _, _ = orchestrator.analyze_image(img_bgr)
+    return analysis
+
+@app.post("/api/translate-text", response_model=SingleTranslateResponse)
+def translate_single_text(req: SingleTranslateRequest):
+    glossary_dict = orchestrator.glossary_mgr.get_glossary_dict()
+    res = orchestrator.translation_provider.translate(
+        text=req.text,
+        source_lang=req.sourceLanguage,
+        target_lang=req.targetLanguage,
+        context=req.context,
+        text_type=req.textType,
+        glossary=glossary_dict
+    )
+    return SingleTranslateResponse(
+        originalText=req.text,
+        translatedText=res.get("targetText", req.text),
+        detectedSourceLanguage=req.sourceLanguage,
+        confidence=res.get("confidence", 0.98),
+        isGlossaryOverride=res.get("isGlossaryOverride", False)
+    )
+
+@app.post("/api/process", response_model=ProcessImageResponse)
+async def process_image(
+    file: Optional[UploadFile] = File(None),
+    imageBase64: Optional[str] = Form(None),
+    sourceLanguage: str = Form("auto"),
+    targetLanguage: str = Form("ja")
+):
+    """
+    Full End-to-End In-Image Text Localization for a single target language.
+    """
+    start_time = time.time()
+    if file:
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    elif imageBase64:
+        img_bgr = base64_to_np(imageBase64)
+    else:
+        raise HTTPException(status_code=400, detail="No image provided")
+
+    if img_bgr is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
 
     img_h, img_w = img_bgr.shape[:2]
 
-    # Step 1: Run OCR text detection
-    raw_ocr_items = ocr_engine.detect_text(img_bgr)
+    # Pipeline
+    analysis, _, inpainted_bgr = orchestrator.analyze_image(img_bgr)
+    src_lang = analysis.sourceLanguage if sourceLanguage == "auto" else sourceLanguage
     
-    # Step 2: Extract text appearance & foreground colors
-    text_blocks: List[TextBlock] = []
-    for item in raw_ocr_items:
-        style = style_analyzer.analyze_style(img_bgr, item)
-        orig_text = item["text"]
-        
-        # Step 3: Translate
-        translated_text = translator.translate_text(orig_text, source_lang=sourceLanguage, target_lang=targetLanguage)
-
-        text_block = TextBlock(
-            id=item["id"],
-            originalText=orig_text,
-            translatedText=translated_text,
-            confidence=item["confidence"],
-            boundingBox=BoundingBox(**item["boundingBox"]),
-            polygon=item["polygon"],
-            rotation=item.get("rotation", 0.0),
-            style=style,
-            isEdited=False,
-            skipTranslation=False
-        )
-        text_blocks.append(text_block)
-
-    # Step 4: Background Inpainting (Remove original text)
-    inpainted_bgr, _ = inpainter.remove_text(img_bgr, raw_ocr_items, dilation_px=3)
-
-    # Step 5: Render translated text with Unicode font engine
-    translated_bgr = text_renderer.render_all_blocks(inpainted_bgr, text_blocks, target_lang=targetLanguage)
-
-    # Convert to base64 data URIs
-    original_b64 = np_to_base64(img_bgr)
-    inpainted_b64 = np_to_base64(inpainted_bgr)
-    translated_b64 = np_to_base64(translated_bgr)
+    variant = orchestrator.localize_for_language(
+        img_bgr=img_bgr,
+        inpainted_bgr=inpainted_bgr,
+        text_blocks=analysis.textBlocks,
+        source_lang=src_lang,
+        target_lang=targetLanguage
+    )
 
     elapsed_ms = (time.time() - start_time) * 1000
 
     return ProcessImageResponse(
         success=True,
-        sourceLanguage=sourceLanguage,
+        sourceLanguage=src_lang,
+        detectedScript=analysis.detectedScript,
         targetLanguage=targetLanguage,
         imageWidth=img_w,
         imageHeight=img_h,
-        textBlocks=text_blocks,
-        translatedImageBase64=translated_b64,
-        inpaintedImageBase64=inpainted_b64,
-        originalImageBase64=original_b64,
+        textBlocks=variant.textBlocks,
+        translatedImageBase64=variant.translatedImageBase64,
+        inpaintedImageBase64=np_to_base64(inpainted_bgr),
+        originalImageBase64=np_to_base64(img_bgr),
+        processingTimeMs=round(elapsed_ms, 2),
+        qaResult=variant.qaResult
+    )
+
+@app.post("/api/process-multi", response_model=MultiProcessResponse)
+async def process_multi_languages(
+    file: Optional[UploadFile] = File(None),
+    imageBase64: Optional[str] = Form(None),
+    sourceLanguage: str = Form("auto"),
+    targetLanguages: str = Form("ja,hi,de,es,fr")
+):
+    """
+    Multi-Language Batch In-Image Localization.
+    Runs Vision & Inpainting once, then translates, renders, and validates QA
+    for each requested target language concurrently.
+    """
+    start_time = time.time()
+
+    # Parse target languages
+    if targetLanguages.startswith("["):
+        try:
+            target_langs = json.loads(targetLanguages)
+        except Exception:
+            target_langs = [l.strip() for l in targetLanguages.replace("[", "").replace("]", "").replace('"', '').split(",") if l.strip()]
+    else:
+        target_langs = [l.strip() for l in targetLanguages.split(",") if l.strip()]
+
+    if not target_langs:
+        target_langs = ["ja"]
+
+    if file:
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    elif imageBase64:
+        img_bgr = base64_to_np(imageBase64)
+    else:
+        raise HTTPException(status_code=400, detail="No image provided")
+
+    if img_bgr is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    img_h, img_w = img_bgr.shape[:2]
+
+    # Analyze & Inpaint once
+    analysis, _, inpainted_bgr = orchestrator.analyze_image(img_bgr)
+    src_lang = analysis.sourceLanguage if sourceLanguage == "auto" else sourceLanguage
+
+    # Generate variants for each target language
+    variants: List[LocalizedVariant] = []
+    for lang_code in target_langs:
+        v = orchestrator.localize_for_language(
+            img_bgr=img_bgr,
+            inpainted_bgr=inpainted_bgr,
+            text_blocks=analysis.textBlocks,
+            source_lang=src_lang,
+            target_lang=lang_code
+        )
+        variants.append(v)
+
+    elapsed_ms = (time.time() - start_time) * 1000
+
+    return MultiProcessResponse(
+        success=True,
+        sourceLanguage=src_lang,
+        detectedScript=analysis.detectedScript,
+        targetLanguages=target_langs,
+        imageWidth=img_w,
+        imageHeight=img_h,
+        originalImageBase64=np_to_base64(img_bgr),
+        inpaintedImageBase64=np_to_base64(inpainted_bgr),
+        variants=variants,
         processingTimeMs=round(elapsed_ms, 2)
     )
+
+@app.post("/api/batch-process")
+async def batch_process_images(req: BatchProcessRequest):
+    """
+    Batch Localization across multiple images and multiple languages.
+    """
+    results = []
+    for img_obj in req.images:
+        fname = img_obj.get("filename", "image.png")
+        b64 = img_obj.get("base64", "")
+        if not b64:
+            continue
+        try:
+            img_bgr = base64_to_np(b64)
+            img_h, img_w = img_bgr.shape[:2]
+            analysis, _, inpainted_bgr = orchestrator.analyze_image(img_bgr)
+            src_lang = analysis.sourceLanguage if req.sourceLanguage == "auto" else req.sourceLanguage
+            
+            variants = []
+            for lang_code in req.targetLanguages:
+                v = orchestrator.localize_for_language(
+                    img_bgr=img_bgr,
+                    inpainted_bgr=inpainted_bgr,
+                    text_blocks=analysis.textBlocks,
+                    source_lang=src_lang,
+                    target_lang=lang_code
+                )
+                variants.append(v)
+            
+            results.append({
+                "filename": fname,
+                "success": True,
+                "sourceLanguage": src_lang,
+                "variants": [v.model_dump() for v in variants]
+            })
+        except Exception as e:
+            results.append({
+                "filename": fname,
+                "success": False,
+                "error": str(e)
+            })
+
+    return {"success": True, "totalProcessed": len(results), "results": results}
 
 @app.post("/api/rerender", response_model=RerenderResponse)
 def rerender_image(req: RerenderRequest):
     """
-    Re-renders translated text onto the inpainted background.
-    Fast execution when user edits text, colors, font size, or alignment in manual editor.
+    Fast live re-rendering of edited typography / translations with automated QA check.
     """
-    # Use inpainted base64 if provided, otherwise reconstruct from original
     base_bgr = base64_to_np(req.inpaintedBase64 or req.imageBase64)
     rendered_bgr = text_renderer.render_all_blocks(base_bgr, req.textBlocks, target_lang=req.targetLanguage)
     rendered_b64 = np_to_base64(rendered_bgr)
 
+    orig_bgr = base64_to_np(req.imageBase64)
+    qa_res = orchestrator.qa_provider.validate(
+        original_img=orig_bgr,
+        localized_img=rendered_bgr,
+        text_blocks=req.textBlocks,
+        target_lang=req.targetLanguage
+    )
+
     return RerenderResponse(
         success=True,
         renderedImageBase64=rendered_b64,
-        textBlocks=req.textBlocks
+        textBlocks=req.textBlocks,
+        qaResult=qa_res
     )
 
-# Mount Next.js static build if present for unified all-in-one deployment
+# Glossary Endpoints
+@app.get("/api/glossary", response_model=List[GlossaryTerm])
+def get_glossary_terms():
+    return orchestrator.glossary_mgr.get_all_terms()
+
+@app.post("/api/glossary", response_model=GlossaryTerm)
+def create_or_update_glossary_term(term: GlossaryTerm):
+    return orchestrator.glossary_mgr.add_or_update_term(term)
+
+@app.delete("/api/glossary/{term_id}")
+def delete_glossary_term(term_id: str):
+    success = orchestrator.glossary_mgr.delete_term(term_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Term not found")
+    return {"success": True, "deletedId": term_id}
+
+# Settings Endpoints
+@app.get("/api/settings", response_model=SettingsConfig)
+def get_settings():
+    safe_settings = orchestrator.settings.model_copy()
+    # Mask API keys for security
+    if safe_settings.openaiApiKey:
+        safe_settings.openaiApiKey = "sk-..." + safe_settings.openaiApiKey[-4:] if len(safe_settings.openaiApiKey) > 4 else "configured"
+        safe_settings.apiKeyConfigured = True
+    if safe_settings.geminiApiKey:
+        safe_settings.geminiApiKey = "..." + safe_settings.geminiApiKey[-4:] if len(safe_settings.geminiApiKey) > 4 else "configured"
+        safe_settings.apiKeyConfigured = True
+    if safe_settings.anthropicApiKey:
+        safe_settings.anthropicApiKey = "..." + safe_settings.anthropicApiKey[-4:] if len(safe_settings.anthropicApiKey) > 4 else "configured"
+        safe_settings.apiKeyConfigured = True
+    return safe_settings
+
+@app.post("/api/settings", response_model=SettingsConfig)
+def update_settings(cfg: SettingsConfig):
+    orchestrator.update_settings(cfg)
+    return get_settings()
+
+@app.post("/api/export-zip")
+def export_zip(req: ZipExportRequest):
+    """
+    Packages all localized images into a clean ZIP archive for download.
+    """
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in req.variants:
+            lang = item.get("language", "localized")
+            b64_str = item.get("imageBase64", "")
+            if "," in b64_str:
+                b64_str = b64_str.split(",", 1)[1]
+            try:
+                raw_bytes = base64.b64decode(b64_str)
+                zf.writestr(f"{req.filenamePrefix}_{lang}.png", raw_bytes)
+            except Exception:
+                pass
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={req.filenamePrefix}_all_languages.zip"}
+    )
+
+# Mount Next.js static build if present
 from fastapi.staticfiles import StaticFiles
 frontend_out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "out")
 if not os.path.exists(frontend_out_dir):

@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Type, 
   Palette, 
@@ -13,18 +13,26 @@ import {
   RefreshCw,
   EyeOff,
   Sparkles,
-  Layers
+  Layers,
+  Shield,
+  Trash2,
+  Edit3
 } from 'lucide-react';
 import { TextBlock, FontOption } from '@/types';
 
 interface TextBlockEditorProps {
-  blocks: TextBlock[];
+  blocks?: TextBlock[];
+  textBlocks?: TextBlock[];
   selectedBlockId: string | null;
   onSelectBlock: (id: string | null) => void;
-  onUpdateBlock: (updatedBlock: TextBlock) => void;
-  onApplyRerender: () => void;
-  isRerendering: boolean;
-  fonts: FontOption[];
+  onUpdateBlock?: (updatedBlock: TextBlock) => void;
+  onBlockChange?: (updatedBlock: TextBlock) => void;
+  onApplyRerender?: () => void;
+  isRerendering?: boolean;
+  fonts?: FontOption[];
+  availableFonts?: FontOption[];
+  targetLanguage?: string;
+  apiBase?: string;
 }
 
 const COLOR_SWATCHES = [
@@ -42,426 +50,384 @@ const COLOR_SWATCHES = [
 
 export const TextBlockEditor: React.FC<TextBlockEditorProps> = ({
   blocks,
+  textBlocks,
   selectedBlockId,
   onSelectBlock,
   onUpdateBlock,
+  onBlockChange,
   onApplyRerender,
-  isRerendering,
-  fonts,
+  isRerendering = false,
+  fonts = [],
+  availableFonts = [],
+  targetLanguage = 'ja',
+  apiBase = '',
 }) => {
-  const selectedBlock = blocks.find((b) => b.id === selectedBlockId) || (blocks.length > 0 ? blocks[0] : null);
+  const allBlocks = textBlocks || blocks || [];
+  const fontList = availableFonts.length > 0 ? availableFonts : fonts;
+  const updateFn = onBlockChange || onUpdateBlock || (() => {});
+
+  const selectedBlock =
+    allBlocks.find((b) => b.id === selectedBlockId) ||
+    (allBlocks.length > 0 ? allBlocks[0] : null);
+
+  const [activeTab, setActiveTab] = useState<'text' | 'typography' | 'effects'>('text');
 
   if (!selectedBlock) {
     return (
-      <div className="glass-panel rounded-2xl p-6 text-center text-slate-400">
-        <Layers className="w-8 h-8 mx-auto text-slate-500 mb-2 opacity-50" />
-        <p className="text-sm font-medium">No text blocks detected</p>
+      <div className="p-8 rounded-3xl bg-slate-900/60 border border-slate-800 text-center text-slate-500 space-y-2">
+        <Layers className="w-8 h-8 mx-auto text-slate-600" />
+        <h4 className="text-xs font-bold text-slate-300">No Text Blocks Detected</h4>
+        <p className="text-[11px] text-slate-500">
+          Upload an image to inspect and edit localized text regions.
+        </p>
       </div>
     );
   }
 
-  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    onUpdateBlock({
-      ...selectedBlock,
-      translatedText: e.target.value,
-      isEdited: true,
-    });
-  };
-
-  const handleColorChange = (color: string) => {
-    onUpdateBlock({
+  const handleStyleChange = (field: string, value: any) => {
+    const updated: TextBlock = {
       ...selectedBlock,
       style: {
         ...selectedBlock.style,
-        color,
+        [field]: value,
       },
       isEdited: true,
-    });
+    };
+    updateFn(updated);
   };
 
-  const handleFontSizeChange = (fontSize: number) => {
-    onUpdateBlock({
+  const handleTextChange = (newTranslatedText: string) => {
+    const updated: TextBlock = {
       ...selectedBlock,
-      style: {
-        ...selectedBlock.style,
-        fontSize,
-      },
+      translatedText: newTranslatedText,
       isEdited: true,
-    });
+    };
+    updateFn(updated);
   };
 
-  const handleAlignmentChange = (alignment: 'left' | 'center' | 'right') => {
-    onUpdateBlock({
-      ...selectedBlock,
-      style: {
-        ...selectedBlock.style,
-        alignment,
-      },
-      isEdited: true,
-    });
-  };
-
-  const handleFontWeightChange = (fontWeight: string) => {
-    onUpdateBlock({
-      ...selectedBlock,
-      style: {
-        ...selectedBlock.style,
-        fontWeight,
-      },
-      isEdited: true,
-    });
-  };
-
-  const handleRotationChange = (rotation: number) => {
-    onUpdateBlock({
-      ...selectedBlock,
-      rotation,
-      style: {
-        ...selectedBlock.style,
-        rotation,
-      },
-      isEdited: true,
-    });
-  };
-
-  const handleToggleSkip = () => {
-    onUpdateBlock({
-      ...selectedBlock,
-      skipTranslation: !selectedBlock.skipTranslation,
-      isEdited: true,
-    });
+  const handleRegenerateTranslation = async () => {
+    if (!apiBase) return;
+    try {
+      const res = await fetch(`${apiBase}/api/translate-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: selectedBlock.originalText,
+          sourceLanguage: selectedBlock.sourceLanguage || 'auto',
+          targetLanguage,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        handleTextChange(data.translatedText);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return (
-    <div className="flex flex-col h-full glass-panel rounded-2xl border border-white/10 overflow-hidden shadow-2xl">
-      {/* Header */}
-      <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between bg-slate-900/80">
-        <div className="flex items-center space-x-2">
-          <Sliders className="w-4 h-4 text-indigo-400" />
-          <h3 className="text-sm font-bold text-white tracking-wide">
-            Text Block Inspector
-          </h3>
-        </div>
-        <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-          {blocks.length} {blocks.length === 1 ? 'Region' : 'Regions'}
-        </span>
-      </div>
-
+    <div className="p-6 rounded-3xl bg-slate-900/70 border border-slate-800/90 shadow-2xl space-y-6">
       {/* Block Selector Tabs */}
-      <div className="px-4 py-2.5 border-b border-white/5 bg-slate-950/60 overflow-x-auto flex items-center space-x-1.5 scrollbar-thin">
-        {blocks.map((block, idx) => {
-          const isSelected = selectedBlock.id === block.id;
-          return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+            <Layers className="w-3.5 h-3.5 text-cyan-400" />
+            Detected Regions ({allBlocks.length})
+          </h3>
+          <span className="text-[10px] text-slate-500 font-mono">ID: {selectedBlock.id}</span>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+          {allBlocks.map((b) => (
             <button
-              key={block.id}
-              onClick={() => onSelectBlock(block.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all flex items-center space-x-1.5 ${
-                isSelected
-                  ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-sm'
-                  : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800'
+              key={b.id}
+              onClick={() => onSelectBlock(b.id)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-all ${
+                b.id === selectedBlock.id
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                  : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-white'
               }`}
             >
-              <span>#{idx + 1}</span>
-              <span className="truncate max-w-[100px]">{block.originalText}</span>
+              {b.originalText.substring(0, 10)}
+              {b.originalText.length > 10 ? '...' : ''}
             </button>
-          );
-        })}
+          ))}
+        </div>
       </div>
 
-      {/* Form Content */}
-      <div className="p-5 space-y-4 overflow-y-auto flex-1">
-        {/* Original Text Reference */}
-        <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800/80 space-y-1">
-          <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            <span>Original OCR Text</span>
-            <span className="text-emerald-400 font-mono">
-              {Math.round(selectedBlock.confidence * 100)}% Conf
-            </span>
-          </div>
-          <p className="text-sm font-mono text-slate-200 font-semibold break-words">
-            {selectedBlock.originalText}
-          </p>
-        </div>
+      {/* Editor Sub-Tabs: Text | Typography | 3D Effects */}
+      <div className="flex items-center p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold">
+        <button
+          onClick={() => setActiveTab('text')}
+          className={`flex-1 py-1.5 rounded-lg transition-all ${
+            activeTab === 'text' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Translation
+        </button>
+        <button
+          onClick={() => setActiveTab('typography')}
+          className={`flex-1 py-1.5 rounded-lg transition-all ${
+            activeTab === 'typography' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Typography
+        </button>
+        <button
+          onClick={() => setActiveTab('effects')}
+          className={`flex-1 py-1.5 rounded-lg transition-all ${
+            activeTab === 'effects' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          3D & Effects
+        </button>
+      </div>
 
-        {/* Translated Text Input */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center justify-between">
-            <span>Translated Text</span>
-            {selectedBlock.isEdited && (
-              <span className="text-[10px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-                Custom Modified
-              </span>
-            )}
-          </label>
-          <textarea
-            rows={2}
-            value={selectedBlock.translatedText}
-            onChange={handleTextChange}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-medium resize-none"
-            placeholder="Enter translated text..."
-          />
-        </div>
-
-        {/* Font Family Selector */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-            Font Family & Script
-          </label>
-          <select
-            value={selectedBlock.style.fontFamily}
-            onChange={(e) =>
-              onUpdateBlock({
-                ...selectedBlock,
-                style: { ...selectedBlock.style, fontFamily: e.target.value },
-                isEdited: true,
-              })
-            }
-            className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-medium focus:outline-none focus:border-cyan-400"
-          >
-            {fonts.map((f) => (
-              <option key={f.id} value={f.name}>
-                {f.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Font Size & Weight */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-300">
-              <span>Font Size</span>
-              <span className="font-mono text-cyan-400 font-bold">{selectedBlock.style.fontSize}px</span>
+      {/* Tab 1: Translation Review & Direct Edit */}
+      {activeTab === 'text' && (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+              Original Text ({selectedBlock.sourceLanguage || 'English'})
+            </label>
+            <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 font-medium">
+              {selectedBlock.originalText}
             </div>
-            <input
-              type="range"
-              min={10}
-              max={100}
-              value={selectedBlock.style.fontSize}
-              onChange={(e) => handleFontSizeChange(parseInt(e.target.value))}
-              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] font-semibold text-slate-300">
+                Localized Text ({targetLanguage.toUpperCase()})
+              </label>
+              <button
+                onClick={handleRegenerateTranslation}
+                className="text-[10px] text-cyan-400 hover:underline flex items-center gap-1"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Regenerate</span>
+              </button>
+            </div>
+            <textarea
+              rows={2}
+              value={selectedBlock.translatedText}
+              onChange={(e) => handleTextChange(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-cyan-500"
             />
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-              Font Weight
+          <div className="flex items-center space-x-2 pt-1">
+            <button
+              onClick={() => {
+                const updated: TextBlock = {
+                  ...selectedBlock,
+                  skipTranslation: !selectedBlock.skipTranslation,
+                };
+                updateFn(updated);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+                selectedBlock.skipTranslation
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+              }`}
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span>{selectedBlock.skipTranslation ? 'Protected (Skipping Translation)' : 'Protect Text Region'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 2: Typography & Sizing */}
+      {activeTab === 'typography' && (
+        <div className="space-y-4">
+          {/* Font Family */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+              Font Family
             </label>
-            <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-xl border border-slate-700">
-              {['light', 'normal', 'bold'].map((weight) => (
+            <select
+              value={selectedBlock.style.fontFamily}
+              onChange={(e) => handleStyleChange('fontFamily', e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-cyan-500"
+            >
+              <option value="Noto Sans">Noto Sans (Universal Multilingual)</option>
+              <option value="Noto Sans JP">Noto Sans JP (Japanese Kanji/Kana)</option>
+              <option value="Noto Sans Devanagari">Noto Sans Devanagari (Hindi)</option>
+              <option value="Noto Sans Arabic">Noto Sans Arabic (Arabic RTL)</option>
+              <option value="Noto Sans Hebrew">Noto Sans Hebrew (Hebrew RTL)</option>
+              <option value="Roboto">Roboto (Latin Modern)</option>
+              <option value="Impact">Impact (Bold Gaming Display)</option>
+              <option value="Montserrat">Montserrat (Geometric Modern)</option>
+            </select>
+          </div>
+
+          {/* Font Size & Weight */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="flex justify-between text-[11px] font-semibold text-slate-300 mb-1">
+                <span>Font Size</span>
+                <span className="font-mono text-cyan-400">{selectedBlock.style.fontSize}px</span>
+              </div>
+              <input
+                type="range"
+                min={10}
+                max={120}
+                value={selectedBlock.style.fontSize}
+                onChange={(e) => handleStyleChange('fontSize', parseInt(e.target.value, 10))}
+                className="w-full accent-cyan-400"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                Weight
+              </label>
+              <select
+                value={selectedBlock.style.fontWeight}
+                onChange={(e) => handleStyleChange('fontWeight', e.target.value)}
+                className="w-full px-3 py-1.5 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-cyan-500"
+              >
+                <option value="normal">Normal (400)</option>
+                <option value="bold">Bold (700)</option>
+                <option value="light">Light (300)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Color & Alignment */}
+          <div className="space-y-2">
+            <label className="block text-[11px] font-semibold text-slate-300">
+              Text Color
+            </label>
+            <div className="flex items-center space-x-2">
+              <input
+                type="color"
+                value={selectedBlock.style.color}
+                onChange={(e) => handleStyleChange('color', e.target.value)}
+                className="w-8 h-8 rounded-lg bg-transparent border border-slate-700 cursor-pointer"
+              />
+              <input
+                type="text"
+                value={selectedBlock.style.color}
+                onChange={(e) => handleStyleChange('color', e.target.value)}
+                className="w-24 px-2 py-1 text-xs font-mono rounded-lg bg-slate-950 border border-slate-700 text-white"
+              />
+              <div className="flex gap-1">
+                {COLOR_SWATCHES.slice(0, 5).map((swatch) => (
+                  <button
+                    key={swatch}
+                    onClick={() => handleStyleChange('color', swatch)}
+                    style={{ backgroundColor: swatch }}
+                    className="w-5 h-5 rounded-full border border-slate-700 hover:scale-110 transition-transform"
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Alignment */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+              Alignment
+            </label>
+            <div className="flex gap-2">
+              {(['left', 'center', 'right'] as const).map((align) => (
                 <button
-                  key={weight}
-                  onClick={() => handleFontWeightChange(weight)}
-                  className={`py-1 rounded-lg text-xs font-medium capitalize transition-all ${
-                    selectedBlock.style.fontWeight === weight
-                      ? 'bg-indigo-600 text-white'
-                      : 'text-slate-400 hover:text-white'
+                  key={align}
+                  onClick={() => handleStyleChange('alignment', align)}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium border flex items-center justify-center gap-1 transition-all ${
+                    selectedBlock.style.alignment === align
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
                   }`}
                 >
-                  {weight}
+                  {align === 'left' && <AlignLeft className="w-3.5 h-3.5" />}
+                  {align === 'center' && <AlignCenter className="w-3.5 h-3.5" />}
+                  {align === 'right' && <AlignRight className="w-3.5 h-3.5" />}
+                  <span className="capitalize">{align}</span>
                 </button>
               ))}
             </div>
           </div>
         </div>
+      )}
 
-        {/* Color Picker & Palette */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-300">
-            <span>Text Face Color</span>
-            <span className="font-mono text-xs text-slate-400">{selectedBlock.style.color}</span>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <div className="relative flex-shrink-0">
-              <input
-                type="color"
-                value={selectedBlock.style.color}
-                onChange={(e) => handleColorChange(e.target.value)}
-                className="w-9 h-9 rounded-xl border border-slate-700 cursor-pointer bg-transparent p-0 overflow-hidden"
-              />
-            </div>
-
-            <div className="flex flex-wrap gap-1.5 flex-1">
-              {COLOR_SWATCHES.map((hex) => (
-                <button
-                  key={hex}
-                  onClick={() => handleColorChange(hex)}
-                  style={{ backgroundColor: hex }}
-                  className={`w-6 h-6 rounded-lg border transition-transform hover:scale-110 ${
-                    selectedBlock.style.color.toUpperCase() === hex
-                      ? 'border-cyan-400 scale-110 shadow-[0_0_8px_rgba(6,182,212,0.8)]'
-                      : 'border-white/20'
-                  }`}
-                  title={hex}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 3D Extrusion Depth & Shadow Color */}
-        <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-purple-300 flex items-center space-x-1.5">
-              <span>3D Shadow & Extrusion</span>
-            </span>
-            <div className="flex items-center space-x-2">
-              <input
-                type="color"
-                value={selectedBlock.style.shadowColor || '#7A0B3C'}
-                onChange={(e) =>
-                  onUpdateBlock({
-                    ...selectedBlock,
-                    style: {
-                      ...selectedBlock.style,
-                      shadowColor: e.target.value,
-                      shadowOffsetY: selectedBlock.style.shadowOffsetY || 6,
-                    },
-                    isEdited: true,
-                  })
-                }
-                className="w-6 h-6 rounded border border-slate-700 cursor-pointer bg-transparent p-0"
-              />
-              <span className="font-mono text-xs text-purple-300">
-                {selectedBlock.style.shadowOffsetY || 0}px
-              </span>
-            </div>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={20}
-            value={selectedBlock.style.shadowOffsetY || 0}
-            onChange={(e) =>
-              onUpdateBlock({
-                ...selectedBlock,
-                style: {
-                  ...selectedBlock.style,
-                  shadowOffsetY: parseInt(e.target.value),
-                  shadowColor: selectedBlock.style.shadowColor || '#7A0B3C',
-                },
-                isEdited: true,
-              })
-            }
-            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-          />
-        </div>
-
-        {/* Outline Stroke & Border */}
-        <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
-              Outline Stroke
-            </span>
-            <div className="flex items-center space-x-2">
-              <input
-                type="color"
-                value={selectedBlock.style.strokeColor || '#200515'}
-                onChange={(e) =>
-                  onUpdateBlock({
-                    ...selectedBlock,
-                    style: {
-                      ...selectedBlock.style,
-                      strokeColor: e.target.value,
-                      strokeWidth: selectedBlock.style.strokeWidth || 3,
-                    },
-                    isEdited: true,
-                  })
-                }
-                className="w-6 h-6 rounded border border-slate-700 cursor-pointer bg-transparent p-0"
-              />
-              <span className="font-mono text-xs text-cyan-300">
+      {/* Tab 3: 3D Shadows, Stroke, Glow */}
+      {activeTab === 'effects' && (
+        <div className="space-y-4">
+          {/* Stroke / Outline */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-300">Stroke Outline</span>
+              <span className="text-[11px] font-mono text-cyan-400">
                 {selectedBlock.style.strokeWidth || 0}px
               </span>
             </div>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={10}
-            value={selectedBlock.style.strokeWidth || 0}
-            onChange={(e) =>
-              onUpdateBlock({
-                ...selectedBlock,
-                style: {
-                  ...selectedBlock.style,
-                  strokeWidth: parseInt(e.target.value),
-                  strokeColor: selectedBlock.style.strokeColor || '#200515',
-                },
-                isEdited: true,
-              })
-            }
-            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-          />
-        </div>
-
-        {/* Alignment & Rotation */}
-        <div className="grid grid-cols-2 gap-3 pt-1">
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-              Alignment
-            </label>
-            <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-700">
-              {(['left', 'center', 'right'] as const).map((align) => {
-                const Icon = align === 'left' ? AlignLeft : align === 'center' ? AlignCenter : AlignRight;
-                return (
-                  <button
-                    key={align}
-                    onClick={() => handleAlignmentChange(align)}
-                    className={`flex-1 py-1.5 flex items-center justify-center rounded-lg transition-all ${
-                      selectedBlock.style.alignment === align
-                        ? 'bg-indigo-600 text-white'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-300">
-              <span>Rotation</span>
-              <span className="font-mono text-cyan-400">{Math.round(selectedBlock.rotation)}°</span>
-            </div>
             <input
               type="range"
-              min={-90}
-              max={90}
-              value={Math.round(selectedBlock.rotation)}
-              onChange={(e) => handleRotationChange(parseInt(e.target.value))}
-              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+              min={0}
+              max={12}
+              value={selectedBlock.style.strokeWidth || 0}
+              onChange={(e) => handleStyleChange('strokeWidth', parseInt(e.target.value, 10))}
+              className="w-full accent-cyan-400"
             />
+            <div className="flex items-center space-x-2 pt-1">
+              <input
+                type="color"
+                value={selectedBlock.style.strokeColor || '#000000'}
+                onChange={(e) => handleStyleChange('strokeColor', e.target.value)}
+                className="w-6 h-6 rounded border border-slate-700 cursor-pointer"
+              />
+              <span className="text-[11px] text-slate-400">Stroke Color</span>
+            </div>
+          </div>
+
+          {/* 3D Extrusion Shadow */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-300">3D Shadow Offset</span>
+              <span className="text-[11px] font-mono text-cyan-400">
+                {selectedBlock.style.shadowOffsetX || 0}px, {selectedBlock.style.shadowOffsetY || 0}px
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <span className="text-[10px] text-slate-500">X Offset</span>
+                <input
+                  type="range"
+                  min={-20}
+                  max={20}
+                  value={selectedBlock.style.shadowOffsetX || 0}
+                  onChange={(e) => handleStyleChange('shadowOffsetX', parseInt(e.target.value, 10))}
+                  className="w-full accent-cyan-400"
+                />
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-500">Y Offset</span>
+                <input
+                  type="range"
+                  min={-20}
+                  max={20}
+                  value={selectedBlock.style.shadowOffsetY || 0}
+                  onChange={(e) => handleStyleChange('shadowOffsetY', parseInt(e.target.value, 10))}
+                  className="w-full accent-cyan-400"
+                />
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 pt-1">
+              <input
+                type="color"
+                value={selectedBlock.style.shadowColor || '#000000'}
+                onChange={(e) => handleStyleChange('shadowColor', e.target.value)}
+                className="w-6 h-6 rounded border border-slate-700 cursor-pointer"
+              />
+              <span className="text-[11px] text-slate-400">Shadow / Extrusion Color</span>
+            </div>
           </div>
         </div>
-
-        {/* Actions */}
-        <div className="pt-2 border-t border-white/10 flex items-center space-x-2">
-          <button
-            onClick={handleToggleSkip}
-            className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all flex items-center justify-center space-x-1.5 ${
-              selectedBlock.skipTranslation
-                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-            }`}
-          >
-            <EyeOff className="w-3.5 h-3.5" />
-            <span>{selectedBlock.skipTranslation ? 'Skipped' : 'Skip Translation'}</span>
-          </button>
-
-          <button
-            onClick={onApplyRerender}
-            disabled={isRerendering}
-            className="flex-1 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-bold shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center space-x-1.5 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRerendering ? 'animate-spin' : ''}`} />
-            <span>Apply Changes</span>
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

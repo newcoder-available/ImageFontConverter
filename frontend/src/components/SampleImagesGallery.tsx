@@ -6,40 +6,36 @@ import { SampleImageItem } from '@/types';
 
 interface SampleImagesGalleryProps {
   samples: Record<string, SampleImageItem>;
-  onSelectSample: (sample: SampleImageItem) => void;
+  onSelectSample: (sampleKeyOrItem: any, base64?: string) => void;
   disabled?: boolean;
 }
 
 export const SampleImagesGallery: React.FC<SampleImagesGalleryProps> = ({
   samples,
   onSelectSample,
-  disabled
+  disabled = false,
 }) => {
   const sampleList = Object.values(samples);
   if (sampleList.length === 0) return null;
 
   return (
-    <div className="w-full mt-6">
-      <div className="flex items-center space-x-2 mb-3">
-        <Sparkles className="w-4 h-4 text-cyan-400" />
-        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Or try with instant demo presets
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div className="w-full">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {sampleList.map((sample) => {
           const isGaming = sample.filename.includes('gaming');
           return (
             <div
               key={sample.filename}
-              onClick={() => !disabled && onSelectSample(sample)}
-              className={`flex items-center space-x-4 p-3.5 rounded-xl border border-slate-800/80 bg-slate-900/50 hover:bg-slate-850 hover:border-indigo-500/50 transition-all cursor-pointer group ${
+              onClick={() => {
+                if (!disabled) {
+                  onSelectSample(sample.filename, sample.base64);
+                }
+              }}
+              className={`flex items-center space-x-3 p-3 rounded-xl border border-slate-800 bg-slate-900/50 hover:bg-slate-800 hover:border-cyan-500/40 transition-all cursor-pointer group ${
                 disabled ? 'opacity-50 cursor-not-allowed' : ''
               }`}
             >
-              <div className="relative w-20 h-14 rounded-lg overflow-hidden border border-slate-700/60 flex-shrink-0 bg-slate-950">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
+              <div className="relative w-16 h-12 rounded-lg overflow-hidden border border-slate-700/60 flex-shrink-0 bg-slate-950">
                 <img
                   src={sample.base64}
                   alt={sample.title}
@@ -54,19 +50,13 @@ export const SampleImagesGallery: React.FC<SampleImagesGalleryProps> = ({
                   ) : (
                     <ShoppingBag className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                   )}
-                  <h4 className="text-sm font-semibold text-white truncate">
+                  <h4 className="text-xs font-semibold text-white truncate">
                     {sample.title}
                   </h4>
                 </div>
-                <p className="text-xs text-slate-400 truncate mt-0.5">
-                  {isGaming
-                    ? 'START GAME · SELECT BET · WINNER'
-                    : 'SUMMER MEGA SALE · 50% DISCOUNT · SHOP NOW'}
+                <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                  {isGaming ? 'Gaming HUD · BOOSTER' : 'Promotional Banner'}
                 </p>
-              </div>
-
-              <div className="px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-300 text-xs font-medium border border-indigo-500/20 group-hover:bg-indigo-500/20 transition-colors">
-                Try
               </div>
             </div>
           );
